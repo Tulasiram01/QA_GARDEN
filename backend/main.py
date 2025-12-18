@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func
@@ -40,7 +41,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Locator Management System", version="1.0.0", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+@app.get("/")
+def root():
+    """Root endpoint"""
+    return {
+        "service": "Locator Management System",
+        "version": "1.0.0",
+        "status": "running",
+        "docs": "/docs"
+    }
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "locator-system"}
 
 @app.post("/add-locator", response_model=Element)
 def add_locator(element: ElementCreate, db: Session = Depends(get_db)):
@@ -54,7 +76,8 @@ def add_locator(element: ElementCreate, db: Session = Depends(get_db)):
         
         existing = db.query(ElementModel).filter(
             ElementModel.screen_id == element.screen_id,
-            ElementModel.css_selector == element.css_selector
+            ElementModel.css_selector == element.css_selector,
+            ElementModel.text_content == element.text_content
         ).first()
         
         if existing:
@@ -75,6 +98,18 @@ def add_locator(element: ElementCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Database error")
 
 
+
+@app.get("/pages")
+def get_pages(session_id: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    """Get all pages/screens"""
+    try:
+        query = db.query(ScreenModel)
+        if session_id:
+            query = query.filter(ScreenModel.session_id == session_id)
+        screens = query.all()
+        return [{"id": s.id, "url": s.url, "name": s.name, "session_id": s.session_id} for s in screens]
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database error")
 
 @app.post("/screens", response_model=Screen)
 def create_screen(screen: ScreenCreate, db: Session = Depends(get_db)):
@@ -97,6 +132,42 @@ def create_screen(screen: ScreenCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Database error")
 
 
+
+@app.get("/locators/latest")
+def get_latest_locators(db: Session = Depends(get_db)):
+    """Get all locators from the latest session"""
+    try:
+        latest_session = db.query(
+            ScreenModel.session_id,
+            func.max(ScreenModel.created_at).label('max_created')
+        ).filter(
+            ScreenModel.session_id.isnot(None)
+        ).group_by(ScreenModel.session_id).order_by(func.max(ScreenModel.created_at).desc()).first()
+        
+        if not latest_session:
+            return []
+        
+        screen_ids = db.query(ScreenModel.id).filter(
+            ScreenModel.session_id == latest_session.session_id
+        ).all()
+        screen_ids = [s[0] for s in screen_ids]
+        
+        elements = db.query(ElementModel).filter(
+            ElementModel.screen_id.in_(screen_ids)
+        ).all()
+        
+        return [{
+            "id": elem.id,
+            "screen_id": elem.screen_id,
+            "element_name": elem.element_name,
+            "element_type": elem.element_type,
+            "css_selector": elem.css_selector,
+            "xpath": elem.xpath,
+            "verified": elem.verified,
+            "stability_score": elem.stability_score
+        } for elem in elements]
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database error")
 
 @app.get("/locators")
 def get_all_locators(session_id: Optional[str] = Query(None), db: Session = Depends(get_db)):
@@ -143,25 +214,6 @@ def get_locators_by_page(page: str, db: Session = Depends(get_db)):
     except SQLAlchemyError:
         raise HTTPException(status_code=500, detail="Database error")
 
-@app.get("/pages")
-def get_pages(session_id: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Get list of extracted pages"""
-    try:
-        query = db.query(ScreenModel)
-        if session_id:
-            query = query.filter(ScreenModel.session_id == session_id)
-        
-        screens = query.all()
-        return [{
-            "id": screen.id,
-            "name": screen.name,
-            "url": screen.url,
-            "title": screen.title,
-            "created_at": screen.created_at.strftime("%d/%m/%Y %I:%M %p") if screen.created_at else None
-        } for screen in screens]
-    except SQLAlchemyError:
-        raise HTTPException(status_code=500, detail="Database error")
-
 @app.get("/ui-elements")
 def get_ui_elements(
     session_id: Optional[str] = Query(None),
@@ -195,65 +247,31 @@ def get_ui_elements(
     except SQLAlchemyError:
         raise HTTPException(status_code=500, detail="Database error")
 
-@app.get("/locator-stats")
-def get_locator_stats(session_id: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Get total counts and analytics"""
+@app.get("/sessions")
+def get_sessions(db: Session = Depends(get_db)):
+    """Get list of last 5 sessions with metadata"""
     try:
-        screen_query = db.query(ScreenModel)
-        if session_id:
-            screen_query = screen_query.filter(ScreenModel.session_id == session_id)
+        sessions = db.query(
+            ScreenModel.session_id,
+            func.min(ScreenModel.created_at).label('created_at'),
+            func.count(ScreenModel.id).label('total_pages')
+        ).filter(ScreenModel.session_id.isnot(None)).group_by(ScreenModel.session_id).all()
         
-        total_pages = screen_query.count()
+        result = []
+        for session in sessions:
+            total_elements = db.query(func.count(ElementModel.id)).join(ScreenModel).filter(
+                ScreenModel.session_id == session.session_id
+            ).scalar()
+            
+            result.append({
+                "session_id": session.session_id,
+                "created_at": session.created_at.strftime("%d/%m/%Y %I:%M %p") if session.created_at else None,
+                "total_pages": session.total_pages,
+                "total_elements": total_elements
+            })
         
-        element_query = db.query(ElementModel).join(ScreenModel)
-        if session_id:
-            element_query = element_query.filter(ScreenModel.session_id == session_id)
-        
-        total_locators = element_query.count()
-        verified_count = element_query.filter(ElementModel.verified == True).count()
-        
-        # Count by element type
-        type_counts = db.query(
-            ElementModel.element_type,
-            func.count(ElementModel.id)
-        ).join(ScreenModel)
-        if session_id:
-            type_counts = type_counts.filter(ScreenModel.session_id == session_id)
-        type_counts = type_counts.group_by(ElementModel.element_type).all()
-        
-        return {
-            "total_pages": total_pages,
-            "total_locators": total_locators,
-            "verified_locators": verified_count,
-            "unverified_locators": total_locators - verified_count,
-            "avg_locators_per_page": total_locators / max(total_pages, 1),
-            "locators_by_type": {t[0]: t[1] for t in type_counts}
-        }
-    except SQLAlchemyError:
-        raise HTTPException(status_code=500, detail="Database error")
-
-@app.get("/locator-errors")
-def get_locator_errors(session_id: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Get errors during extraction (low stability scores)"""
-    try:
-        query = db.query(ElementModel).join(ScreenModel)
-        if session_id:
-            query = query.filter(ScreenModel.session_id == session_id)
-        
-        # Consider elements with stability_score < 50 as potential errors
-        low_quality = query.filter(ElementModel.stability_score < 50).all()
-        
-        return {
-            "total_errors": len(low_quality),
-            "errors": [{
-                "element_id": elem.id,
-                "element_name": elem.element_name,
-                "screen_id": elem.screen_id,
-                "stability_score": elem.stability_score,
-                "css_selector": elem.css_selector,
-                "issue": "Low stability score - locator may be unreliable"
-            } for elem in low_quality]
-        }
+        sorted_result = sorted(result, key=lambda x: x['created_at'], reverse=True)
+        return sorted_result[:5]
     except SQLAlchemyError:
         raise HTTPException(status_code=500, detail="Database error")
 

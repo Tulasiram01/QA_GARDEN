@@ -7,12 +7,13 @@ import os
 from datetime import datetime
 
 class SmartCrawler:
-    def __init__(self, base_url, username, password, api_url, skip_login=False):
+    def __init__(self, base_url, username, password, api_url, skip_login=False, login_button_texts=None):
         self.base_url = base_url.rstrip('/')
         self.username = username
         self.password = password
         self.api_url = api_url
         self.skip_login = skip_login
+        self.login_button_texts = login_button_texts or os.getenv('LOGIN_BUTTON_TEXTS', 'login,sign in').split(',')
         self.visited_urls = set()
         self.extracted_elements = set()
         self.session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -21,6 +22,7 @@ class SmartCrawler:
         self.fallback_data = {'screens': {}, 'elements': []}
         self.api_available = True
         self.fallback_file = f"{self.session_id}_fallback.json"
+        self.screen_cache = {}  # Cache screen_id by URL
         
     def crawl(self, browser: Browser):
         page = browser.new_page()
@@ -82,12 +84,18 @@ class SmartCrawler:
                 if force_rescan:
                     print(f"(Rescan triggered by manual interaction)")
                 print(f"{'='*60}")
-                self._extract_all_elements(page)
-                self.visited_urls.add(current_url)
+                try:
+                    self._extract_all_elements(page)
+                    self.visited_urls.add(current_url)
+                except:
+                    print("  ⚠ Page navigated during extraction")
                 force_rescan = False  # Reset flag
             
             # Show what's on the page
-            interactive_elements = self._get_all_interactive_elements(page)
+            try:
+                interactive_elements = self._get_all_interactive_elements(page)
+            except:
+                interactive_elements = []
             print(f"\nFound {len(interactive_elements)} interactive elements on this page")
             
             # Show options to user
@@ -123,11 +131,11 @@ class SmartCrawler:
                 print("Invalid choice, continuing...")
     
     def _auto_explore_elements(self, page: Page, elements: list):
-        """Auto-click elements and extract locators"""
+        """Auto-click elements and extract locators (including errors/tooltips)"""
         
         # Auto-login if not done yet and credentials available
         if not self.auto_logged_in and not self.skip_login and self.username and self.password:
-            if self._attempt_auto_login(page):
+            if self._attempt_auto_click_login(page):
                 self.auto_logged_in = True
                 print("  ✓ Auto-login successful!")
                 page.wait_for_timeout(3000)
@@ -150,9 +158,9 @@ class SmartCrawler:
                 if not clicked:
                     continue
                 
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(1500)
                 
-                # Extract new elements
+                # Extract errors/tooltips/popups that appeared
                 self._extract_all_elements(page)
                 
                 # Check if URL changed
@@ -358,7 +366,7 @@ class SmartCrawler:
         print("  ✓ All interactions captured!\n")
     
     def _attempt_auto_login(self, page: Page) -> bool:
-        """Attempt to auto-login by detecting and filling login form"""
+        """Attempt to auto-login by detecting and filling login form (LEGACY - direct fill)"""
         try:
             print("\n  → Attempting auto-login...")
             
@@ -410,6 +418,116 @@ class SmartCrawler:
                             btn.click()
                             print(f"  → Clicked login button")
                             page.wait_for_timeout(3000)
+                            return True
+                except:
+                    continue
+            
+            return False
+        except:
+            return False
+    
+    def _attempt_auto_click_login(self, page: Page) -> bool:
+        """Auto-login by CLICKING inputs and buttons (captures ALL validation errors)"""
+        try:
+            print("\n  → Attempting auto-login with validation testing...")
+            
+            # Get all visible inputs
+            all_inputs = []
+            inputs = page.locator('input').all()
+            for inp in inputs:
+                try:
+                    if inp.is_visible():
+                        input_type = (inp.get_attribute('type') or '').lower()
+                        input_name = (inp.get_attribute('name') or '').lower()
+                        input_placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        all_inputs.append({
+                            'element': inp,
+                            'type': input_type,
+                            'name': input_name,
+                            'placeholder': input_placeholder
+                        })
+                except:
+                    continue
+            
+            # Test each input with invalid data to trigger validation
+            print(f"  → Testing {len(all_inputs)} inputs for validation errors...")
+            for inp_data in all_inputs:
+                inp = inp_data['element']
+                try:
+                    inp.click()
+                    page.wait_for_timeout(300)
+                    self._extract_all_elements(page)
+                    
+                    # Test with various invalid inputs
+                    if inp_data['type'] == 'email' or 'email' in inp_data['name'] or 'email' in inp_data['placeholder']:
+                        inp.type('invalid', delay=30)
+                        page.wait_for_timeout(500)
+                        self._extract_all_elements(page)
+                        inp.fill('')
+                    elif inp_data['type'] == 'password' or 'password' in inp_data['name']:
+                        inp.type('123', delay=30)
+                        page.wait_for_timeout(500)
+                        self._extract_all_elements(page)
+                        inp.fill('')
+                    else:
+                        inp.type('test', delay=30)
+                        page.wait_for_timeout(500)
+                        self._extract_all_elements(page)
+                        inp.fill('')
+                except:
+                    continue
+            
+            # Fill form with invalid credentials and submit
+            print(f"  → Testing form submission with invalid data...")
+            for inp_data in all_inputs:
+                inp = inp_data['element']
+                try:
+                    if 'email' in inp_data['type'] or 'email' in inp_data['name'] or 'email' in inp_data['placeholder'] or 'user' in inp_data['name']:
+                        inp.fill('nonexistent@invalid.test')
+                    elif inp_data['type'] == 'password':
+                        inp.fill('wrongpassword123')
+                except:
+                    continue
+            
+            # Submit form to trigger server-side errors
+            buttons = page.locator('button').all()
+            for btn in buttons:
+                try:
+                    if btn.is_visible():
+                        text = (btn.text_content() or '').lower()
+                        if any(pattern.strip().lower() in text for pattern in self.login_button_texts) and 'sign up' not in text:
+                            btn.click()
+                            print(f"  → Submitted with invalid data...")
+                            page.wait_for_timeout(2000)
+                            self._extract_all_elements(page)
+                            page.wait_for_timeout(1000)
+                            self._extract_all_elements(page)
+                            break
+                except:
+                    continue
+            
+            # Now fill with valid credentials
+            print(f"  → Filling valid credentials...")
+            for inp_data in all_inputs:
+                inp = inp_data['element']
+                try:
+                    if 'email' in inp_data['type'] or 'email' in inp_data['name'] or 'email' in inp_data['placeholder'] or 'user' in inp_data['name']:
+                        inp.fill(self.username)
+                    elif inp_data['type'] == 'password':
+                        inp.fill(self.password)
+                except:
+                    continue
+            
+            # Submit with valid credentials
+            for btn in buttons:
+                try:
+                    if btn.is_visible():
+                        text = (btn.text_content() or '').lower()
+                        if any(pattern.strip().lower() in text for pattern in self.login_button_texts) and 'sign up' not in text:
+                            btn.click()
+                            print(f"  → Logging in with valid credentials...")
+                            page.wait_for_timeout(3000)
+                            self._extract_all_elements(page)
                             return True
                 except:
                     continue
@@ -484,42 +602,65 @@ class SmartCrawler:
                         const style = window.getComputedStyle(el);
                         const isPointer = style.cursor === 'pointer';
                         
-                        // Error/validation message indicators
+                        // Error/validation message indicators (expanded)
                         const isError = classes.includes('error') || classes.includes('invalid') || 
-                                       classes.includes('alert') || classes.includes('warning') || 
-                                       role === 'alert' || role === 'status';
+                                       classes.includes('alert') || classes.includes('warning') ||
+                                       classes.includes('message') || classes.includes('validation') ||
+                                       classes.includes('help') || classes.includes('hint') ||
+                                       classes.includes('feedback') || classes.includes('tooltip') ||
+                                       role === 'alert' || role === 'status' || role === 'tooltip';
                         
                         // Check for own text (text directly in element, not children)
                         const childText = Array.from(el.children).map(c => c.textContent).join('');
                         const fullText = el.textContent || '';
                         const ownText = fullText.replace(childText, '').trim();
-                        const hasOwnText = ownText.length > 0;
+                        const hasOwnText = ownText.length > 0 && ownText.length < 500;
                         
-                        const textTags = ['h1','h2','h3','h4','h5','h6','p','label','span','div','b','strong','i','em','small','li','td','th'];
+                        // Check for error-like text content
+                        const errorKeywords = ['required', 'invalid', 'error', 'must', 'cannot', 'failed', 
+                                              'incorrect', 'wrong', 'missing', 'match', 'contain', 'exist',
+                                              'uppercase', 'lowercase', 'numeric', 'symbol', 'character'];
+                        const hasErrorText = errorKeywords.some(keyword => ownText.toLowerCase().includes(keyword));
+                        
+                        const textTags = ['h1','h2','h3','h4','h5','h6','p','label','span','div','b','strong','i','em','small','li','td','th','ul'];
                         
                         return ['button','input','select','textarea','a','img','form','svg','path'].includes(tag) ||
-                               ['button','combobox','option','menuitem','alert','dialog'].includes(role) ||
+                               ['button','combobox','option','menuitem','alert','dialog','tooltip'].includes(role) ||
                                el.onclick || el.hasAttribute('onclick') || isPointer || ariaLabel || title || isError ||
-                               (textTags.includes(tag) && hasOwnText);
+                               (textTags.includes(tag) && hasOwnText) ||
+                               (hasOwnText && hasErrorText);
                     });
                     
-                    return extractable.map(el => ({
-                        tag: el.tagName.toLowerCase(),
-                        id: el.id || null,
-                        name: el.name || null,
-                        testId: el.getAttribute('data-testid') || null,
-                        ariaLabel: el.getAttribute('aria-label') || null,
-                        role: el.getAttribute('role') || null,
-                        text: (el.innerText || el.textContent || '').trim(),
-                        type: el.type || null,
-                        placeholder: el.placeholder || null,
-                        alt: el.alt || null,
-                        src: el.src || null,
-                        href: el.href || null,
-                        className: el.className ? el.className.toString() : null,
-                        title: el.title || null,
-                        validationMessage: el.validationMessage || null
-                    }));
+                    return extractable.map(el => {
+                        // Extract pseudo-element content (::before, ::after)
+                        const beforeContent = window.getComputedStyle(el, '::before').content;
+                        const afterContent = window.getComputedStyle(el, '::after').content;
+                        const pseudoText = [
+                            beforeContent !== 'none' && beforeContent !== '' ? beforeContent.replace(/["']/g, '') : '',
+                            afterContent !== 'none' && afterContent !== '' ? afterContent.replace(/["']/g, '') : ''
+                        ].filter(t => t).join(' ');
+                        
+                        const mainText = (el.innerText || el.textContent || '').trim();
+                        const fullText = [mainText, pseudoText].filter(t => t).join(' ');
+                        
+                        return {
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || null,
+                            name: el.name || null,
+                            testId: el.getAttribute('data-testid') || null,
+                            ariaLabel: el.getAttribute('aria-label') || null,
+                            role: el.getAttribute('role') || null,
+                            text: fullText,
+                            type: el.type || null,
+                            placeholder: el.placeholder || null,
+                            alt: el.alt || null,
+                            src: el.src || null,
+                            href: el.href || null,
+                            className: el.className ? el.className.toString() : null,
+                            title: el.title || null,
+                            validationMessage: el.validationMessage || null
+                        };
+                    })
                 }
             """)
             
@@ -624,19 +765,18 @@ class SmartCrawler:
             screen_name = path.split('/')[-1] if path else 'home'
             screen_name = re.sub(r'[^a-zA-Z0-9_-]', '_', screen_name) or 'home'
             
-            # Get or create screen
-            screens = requests.get(f"{self.api_url}/pages").json()
-            screen_id = next((s['id'] for s in screens if s['url'] == clean_url), None)
-            
+            # Get screen_id from cache or create
+            screen_id = self.screen_cache.get(clean_url)
             if not screen_id:
                 screen_resp = requests.post(f"{self.api_url}/screens", json={
                     "name": screen_name,
                     "url": clean_url,
                     "title": screen_name,
                     "session_id": self.session_id
-                })
+                }, timeout=5)
                 if screen_resp.status_code in [200, 201]:
                     screen_id = screen_resp.json().get('id')
+                    self.screen_cache[clean_url] = screen_id
             
             # Prepare element data
             text_content = elem['text'] if elem['text'] else None
@@ -668,33 +808,18 @@ class SmartCrawler:
             }
             
             # Try API first
-            if self.api_available:
+            if self.api_available and screen_id:
                 try:
-                    # Check for screen with this session_id
-                    screens = requests.get(f"{self.api_url}/pages?session_id={self.session_id}", timeout=2).json()
-                    screen_id = next((s['id'] for s in screens if s['url'] == clean_url), None)
+                    resp = requests.post(f"{self.api_url}/add-locator", json={
+                        "screen_id": screen_id,
+                        **element_data
+                    }, timeout=5)
                     
-                    if not screen_id:
-                        screen_resp = requests.post(f"{self.api_url}/screens", json={
-                            "name": screen_name,
-                            "url": clean_url,
-                            "title": screen_name,
-                            "session_id": self.session_id
-                        }, timeout=5)
-                        if screen_resp.status_code in [200, 201]:
-                            screen_id = screen_resp.json().get('id')
-                    
-                    if screen_id:
-                        resp = requests.post(f"{self.api_url}/add-locator", json={
-                            "screen_id": screen_id,
-                            **element_data
-                        }, timeout=5)
-                        
-                        if resp.status_code in [200, 201]:
-                            return True
-                        else:
-                            self.api_available = False
-                            print(f"  ⚠ API error - switching to fallback")
+                    if resp.status_code in [200, 201]:
+                        return True
+                    else:
+                        self.api_available = False
+                        print(f"  ⚠ API error - switching to fallback")
                 except:
                     self.api_available = False
                     print(f"  ⚠ API failed - switching to fallback")
