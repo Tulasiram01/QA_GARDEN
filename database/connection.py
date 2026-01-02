@@ -9,7 +9,7 @@ load_dotenv()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql://postgres:password@localhost:5432/locator_system"
+    "sqlite:///locator_system.db"  # Default to SQLite
 )
 
 try:

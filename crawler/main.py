@@ -2,6 +2,13 @@ import os
 import sys
 import argparse
 import getpass
+
+# Fix Windows console encoding
+if sys.platform == 'win32':
+    import codecs
+    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+
 from playwright.sync_api import sync_playwright
 from smart_crawler import SmartCrawler
 from dotenv import load_dotenv
@@ -77,7 +84,7 @@ def main():
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
-        crawler = SmartCrawler(base_url, username, password, api_url, skip_login)
+        crawler = SmartCrawler(base_url, username, password, api_url)
         
         try:
             results = crawler.crawl(browser)

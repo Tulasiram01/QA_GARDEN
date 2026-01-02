@@ -81,14 +81,14 @@ def add_locator(element: ElementCreate, db: Session = Depends(get_db)):
         ).first()
         
         if existing:
-            for key, value in element.dict().items():
+            for key, value in element.model_dump().items():
                 if hasattr(existing, key) and value is not None:
                     setattr(existing, key, value)
             db.commit()
             db.refresh(existing)
             return existing
         
-        db_element = ElementModel(**element.dict())
+        db_element = ElementModel(**element.model_dump())
         db.add(db_element)
         db.commit()
         db.refresh(db_element)
@@ -122,7 +122,7 @@ def create_screen(screen: ScreenCreate, db: Session = Depends(get_db)):
             if existing:
                 return existing
         
-        db_screen = ScreenModel(**screen.dict())
+        db_screen = ScreenModel(**screen.model_dump())
         db.add(db_screen)
         db.commit()
         db.refresh(db_screen)
@@ -296,24 +296,32 @@ def get_session_data(session_id: str, db: Session = Depends(get_db)):
                 "created_at": screen.created_at.strftime("%d/%m/%Y %I:%M %p") if screen.created_at else None,
                 "updated_at": screen.updated_at.strftime("%d/%m/%Y %I:%M %p") if screen.updated_at else None,
                 "session_id": screen.session_id,
-                "elements": [{
-                    "element_name": elem.element_name,
-                    "element_type": elem.element_type,
-                    "element_id": elem.element_id,
-                    "element_name_attr": elem.element_name_attr,
-                    "data_testid": elem.data_testid,
-                    "aria_label": elem.aria_label,
-                    "role": elem.role,
-                    "css_selector": elem.css_selector,
-                    "xpath": elem.xpath,
-                    "text_content": elem.text_content,
-                    "stability_score": elem.stability_score,
-                    "verified": elem.verified,
-                    "id": elem.id,
-                    "screen_id": elem.screen_id,
-                    "created_at": elem.created_at.strftime("%d/%m/%Y %I:%M %p") if elem.created_at else None,
-                    "updated_at": elem.updated_at.strftime("%d/%m/%Y %I:%M %p") if elem.updated_at else None
-                } for elem in elements]
+                "elements": [
+                    {k: v for k, v in {
+                        "element_name": elem.element_name,
+                        "element_type": elem.element_type,
+                        "element_id": elem.element_id,
+                        "element_name_attr": elem.element_name_attr,
+                        "data_testid": elem.data_testid,
+                        "aria_label": elem.aria_label,
+                        "role": elem.role,
+                        "css_selector": elem.css_selector,
+                        "xpath": elem.xpath,
+                        "text_content": elem.text_content,
+                        "stability_score": elem.stability_score,
+                        "verified": elem.verified,
+                        "parent_element": elem.parent_element,
+                        "interaction_type": elem.interaction_type,
+                        "element_context": elem.element_context,
+                        "selector_priority": elem.selector_priority,
+                        "form_group": elem.form_group,
+                        "requires_wait": elem.requires_wait,
+                        "id": elem.id,
+                        "screen_id": elem.screen_id,
+                        "created_at": elem.created_at.strftime("%d/%m/%Y %I:%M %p") if elem.created_at else None,
+                        "updated_at": elem.updated_at.strftime("%d/%m/%Y %I:%M %p") if elem.updated_at else None
+                    }.items() if v is not None}
+                for elem in elements]
             })
         
         return result

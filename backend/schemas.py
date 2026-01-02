@@ -15,6 +15,12 @@ class ElementBase(BaseModel):
     text_content: Optional[str] = None
     stability_score: Optional[int] = 0
     verified: bool = False
+    parent_element: Optional[str] = None
+    interaction_type: Optional[str] = None
+    element_context: Optional[str] = None
+    selector_priority: Optional[int] = 3
+    form_group: Optional[str] = None
+    requires_wait: Optional[bool] = False
 
 class ElementCreate(ElementBase):
     screen_id: int

@@ -36,6 +36,12 @@ class Element(Base):
     text_content = Column(Text)
     stability_score = Column(Integer, default=0)
     verified = Column(Boolean, default=False, index=True)
+    parent_element = Column(String(200))
+    interaction_type = Column(String(50))
+    element_context = Column(Text)
+    selector_priority = Column(Integer, default=3)
+    form_group = Column(String(100))
+    requires_wait = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now())
     updated_at = Column(DateTime, default=lambda: datetime.now(), onupdate=lambda: datetime.now())
     
