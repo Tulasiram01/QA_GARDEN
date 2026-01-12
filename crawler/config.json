@@ -1,0 +1,41 @@
+{
+  "crawler": {
+    "max_depth": 6,
+    "max_interactions_per_page": 50,
+    "dom_stability_threshold": 3,
+    "interaction_timeout": 5000,
+    "page_load_timeout": 15000,
+    "page_stability_wait": 1000
+  },
+  "authentication": {
+    "auto_detect": true,
+    "form_timeout": 15000,
+    "mfa_manual_required": true,
+    "oauth_manual_required": true
+  },
+  "element_detection": {
+    "include_shadow_dom": true,
+    "wait_for_lazy_load": true,
+    "extract_dynamic_elements": true,
+    "stability_check_enabled": true
+  },
+  "interaction": {
+    "skip_keywords": [
+      "logout",
+      "sign out",
+      "delete",
+      "remove",
+      "unsubscribe",
+      "cancel",
+      "close",
+      "exit"
+    ],
+    "max_retries": 3,
+    "retry_delay": 1000
+  },
+  "output": {
+    "include_stability_score": true,
+    "include_interaction_type": true,
+    "verify_selectors": true
+  }
+}

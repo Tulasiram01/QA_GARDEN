@@ -10,7 +10,7 @@ if sys.platform == 'win32':
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 from playwright.sync_api import sync_playwright
-from smart_crawler import SmartCrawler
+from universal_crawler import UniversalCrawler
 from dotenv import load_dotenv
 
 # Load .env from parent directory (optional)
@@ -84,7 +84,7 @@ def main():
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
-        crawler = SmartCrawler(base_url, username, password, api_url)
+        crawler = UniversalCrawler(base_url, username, password, api_url)
         
         try:
             results = crawler.crawl(browser)
